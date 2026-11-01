@@ -2,69 +2,120 @@ package com.muteir.app;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.hardware.ConsumerIrManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
+import android.widget.AutoCompleteTextView;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
 
     /** Pausa entre un código y el siguiente, además de la duración de la señal. */
     private static final int PAUSE_MS = 25;
     private static final int DEFAULT_INTERVAL_S = 30;
+    private static final int MAX_INTERVAL_S = 24 * 3600;
 
-    private ConsumerIrManager ir;
-    private final Handler ui = new Handler(Looper.getMainLooper());
-    private volatile boolean running = false;
-
-    private TextView status;
-    private TextView progress;
-    private Button btnAll;
-    private Button btnBrand;
-    private Button btnCustom;
-    private Spinner spCategory;
-    private Spinner spBrand;
-    private Spinner spProto;
-    private CheckBox cbRepeat;
-    private CheckBox cbOnlyOn;
-    private EditText etInterval;
-    private EditText etD;
-    private EditText etS;
-    private EditText etF;
-
-    private static final String[] CATEGORIES = {
-            "Todo", "Solo TV", "Solo audio (equipos, barras, parlantes)", "Solo audio de carro",
-            "Solo otros / sin clasificar"
+    private static final String[] CATEGORY_NAMES = {"Todo", "TV", "Audio", "Carro", "Otros"};
+    private static final String[] CATEGORY_HINTS = {
+            "Televisores, equipos de sonido, carro y otros",
+            "Televisores y pantallas",
+            "Equipos de sonido, barras, parlantes y receptores",
+            "Radios y pantallas de carro",
+            "Equipos sin clasificar (reproductores, proyectores…)"
     };
-
+    private static final String[] POPULAR_BRANDS = {
+            "LG", "Samsung", "Sony", "JBL", "Philips", "Panasonic", "TCL", "Hisense", "Bose", "Yamaha"
+    };
+    private static final int[] INTERVAL_PRESETS = {10, 30, 60, 300, 900};
     private static final String[] PROTOS = {
             "NEC", "NEC corto (Samsung)", "Pioneer (NEC 40 kHz)", "RC5 (Philips)", "RC6 (Philips)",
             "Sony 12 bits", "Sony 15 bits", "JVC", "Denon", "Sharp", "Aiwa", "RCA"
     };
 
+    private ConsumerIrManager ir;
+    private SharedPreferences prefs;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private volatile boolean running = false;
+    private float density;
+
+    // Estado de la interfaz
+    private int category = 0;
+    private int intervalS = DEFAULT_INTERVAL_S;
+    private final int[] categoryCounts = new int[5];
+    private final long[] categoryMillis = new long[5];
+    private final Map<String, String> brandLookup = new HashMap<String, String>();
+
+    // Vistas
+    private MuteButton muteButton;
+    private TextView statusChip;
+    private TextView categoryInfo;
+    private TextView nowSending;
+    private final TextView[] categoryChips = new TextView[5];
+    private Switch swRepeat;
+    private Switch swOnlyOn;
+    private LinearLayout repeatOptions;
+    private TextView intervalValue;
+    private final List<TextView> presetChips = new ArrayList<TextView>();
+    private AutoCompleteTextView brandInput;
+    private TextView brandInfo;
+    private TextView btnBrand;
+    private LinearLayout advancedBody;
+    private TextView advancedHeader;
+    private Spinner spProto;
+    private EditText etD;
+    private EditText etS;
+    private EditText etF;
+    private TextView btnCustom;
+
+    // ------------------------------------------------------------------ ciclo de vida
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        density = getResources().getDisplayMetrics().density;
         ir = (ConsumerIrManager) getSystemService(Context.CONSUMER_IR_SERVICE);
+        prefs = getSharedPreferences("muteir", MODE_PRIVATE);
+        category = clamp(prefs.getInt("category", 0), 0, 4);
+        intervalS = clamp(prefs.getInt("interval", DEFAULT_INTERVAL_S), 1, MAX_INTERVAL_S);
+
+        if (Build.VERSION.SDK_INT >= 21) {
+            getWindow().setStatusBarColor(Theme.BG);
+            getWindow().setNavigationBarColor(Theme.BG);
+        }
+        for (String b : CodeBook.brands()) brandLookup.put(b.toLowerCase(Locale.ROOT), b);
+
         setContentView(buildUi());
         refreshEmitterState();
+        computeCategoryStats();
     }
 
     @Override
@@ -73,190 +124,574 @@ public class MainActivity extends Activity {
         running = false;   // si la app pasa a segundo plano, se detiene el envío
     }
 
-    // ------------------------------------------------------------------ UI
+    // ------------------------------------------------------------------ construcción de la interfaz
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Theme.BG);
+        scroll.setFillViewport(true);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(24), dp(20), dp(24));
+        root.setPadding(dp(20), dp(20), dp(20), dp(32));
         scroll.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText("Mute IR");
-        title.setTextSize(28);
-        title.setTextColor(Color.BLACK);
-        root.addView(title);
+        // Encabezado
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(Theme.text(this, "Mute IR", 26, Theme.TEXT, true));
+        titles.addView(Theme.text(this, "Silencia TV y equipos de sonido", 14, Theme.MUTED, false));
+        header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        statusChip = Theme.text(this, "", 12, Theme.OK, true);
+        statusChip.setPadding(dp(12), dp(6), dp(12), dp(6));
+        header.addView(statusChip);
+        root.addView(header);
 
-        status = new TextView(this);
-        status.setTextSize(14);
-        status.setPadding(0, dp(4), 0, dp(16));
-        root.addView(status);
-
-        // --- Mutear todo
-        root.addView(label("Qué silenciar"));
-        spCategory = new Spinner(this);
-        spCategory.setAdapter(new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_dropdown_item, CATEGORIES));
-        root.addView(spCategory);
-
-        btnAll = new Button(this);
-        btnAll.setText("MUTEAR TODO");
-        btnAll.setTextSize(20);
-        btnAll.setPadding(dp(8), dp(24), dp(8), dp(24));
-        btnAll.setOnClickListener(new View.OnClickListener() {
+        // Botón principal
+        muteButton = new MuteButton(this);
+        muteButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                int c = spCategory.getSelectedItemPosition();
-                boolean all = c == 0;
-                List<CodeBook.Entry> list = CodeBook.select(
-                        all || c == 1, all || c == 2, all || c == 3, all || c == 4, null);
-                runSequence(list, btnAll, "MUTEAR TODO");
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                if (running) {
+                    running = false;
+                    return;
+                }
+                startCategory();
             }
         });
-        root.addView(btnAll, matchWrap(dp(8), 0));
+        root.addView(muteButton, lp(ViewGroup.LayoutParams.MATCH_PARENT, dp(24), dp(8)));
 
-        progress = new TextView(this);
-        progress.setTextSize(13);
-        progress.setPadding(0, dp(6), 0, dp(6));
-        root.addView(progress);
+        nowSending = Theme.text(this, "", 13, Theme.MUTED, false);
+        nowSending.setGravity(Gravity.CENTER);
+        nowSending.setMinLines(2);
+        root.addView(nowSending, lp(ViewGroup.LayoutParams.MATCH_PARENT, 0, dp(8)));
 
-        // --- Repetición
-        cbRepeat = new CheckBox(this);
-        cbRepeat.setText("Repetir hasta que lo detenga");
-        root.addView(cbRepeat);
+        // Categorías
+        root.addView(sectionLabel("Qué silenciar"));
+        HorizontalScrollView chipScroll = new HorizontalScrollView(this);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout chipRow = new LinearLayout(this);
+        chipRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < CATEGORY_NAMES.length; i++) {
+            final int idx = i;
+            TextView chip = chip(CATEGORY_NAMES[i]);
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (running) return;
+                    setCategory(idx);
+                }
+            });
+            categoryChips[i] = chip;
+            chipRow.addView(chip, chipLp());
+        }
+        chipScroll.addView(chipRow);
+        root.addView(chipScroll);
+        categoryInfo = Theme.text(this, "", 13, Theme.MUTED, false);
+        categoryInfo.setPadding(dp(2), dp(10), 0, 0);
+        root.addView(categoryInfo);
 
-        LinearLayout intervalRow = new LinearLayout(this);
-        intervalRow.setOrientation(LinearLayout.HORIZONTAL);
-        intervalRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView intervalLabel = new TextView(this);
-        intervalLabel.setText("Esperar entre repeticiones (segundos): ");
-        intervalLabel.setTextSize(14);
-        etInterval = new EditText(this);
-        etInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
-        etInterval.setText(String.valueOf(DEFAULT_INTERVAL_S));
-        etInterval.setGravity(Gravity.CENTER);
-        etInterval.setEms(4);
-        intervalRow.addView(intervalLabel);
-        intervalRow.addView(etInterval);
-        root.addView(intervalRow);
+        // Tarjeta: repetir
+        LinearLayout repeatCard = card();
+        swRepeat = toggleRow(repeatCard, "Repetir automáticamente",
+                "Vuelve a enviar los códigos hasta que lo detengas");
+        swRepeat.setChecked(prefs.getBoolean("repeat", false));
 
-        cbOnlyOn = new CheckBox(this);
-        cbOnlyOn.setText("En las repeticiones enviar solo códigos \"mute ON\"");
-        cbOnlyOn.setChecked(true);
-        root.addView(cbOnlyOn);
+        repeatOptions = new LinearLayout(this);
+        repeatOptions.setOrientation(LinearLayout.VERTICAL);
+        repeatOptions.setPadding(0, dp(12), 0, 0);
 
-        root.addView(hint(
-                "Apunta el borde superior del teléfono hacia los aparatos (hasta ~8 m, "
-                        + "sin obstáculos). En la mayoría de equipos mute es un interruptor: "
-                        + "si se envía de nuevo, el sonido vuelve. Por eso, al repetir, lo "
-                        + "recomendado es dejar marcada la opción \"solo mute ON\": las "
-                        + "repeticiones solo envían códigos que silencian sin reactivar el "
-                        + "sonido (son pocos equipos). Si la desmarcas, cada repetición vuelve "
-                        + "a alternar el sonido de los demás. La app debe quedar abierta y "
-                        + "en pantalla mientras repite."));
+        repeatOptions.addView(Theme.text(this, "Cada cuánto", 13, Theme.MUTED, false));
+        LinearLayout stepper = new LinearLayout(this);
+        stepper.setOrientation(LinearLayout.HORIZONTAL);
+        stepper.setGravity(Gravity.CENTER_VERTICAL);
+        stepper.setPadding(0, dp(8), 0, dp(8));
+        TextView minus = roundIconButton("−");
+        TextView plus = roundIconButton("+");
+        intervalValue = Theme.text(this, "", 22, Theme.TEXT, true);
+        intervalValue.setGravity(Gravity.CENTER);
+        stepper.addView(minus, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        stepper.addView(intervalValue, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        stepper.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        minus.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setInterval(stepInterval(intervalS, false));
+            }
+        });
+        plus.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setInterval(stepInterval(intervalS, true));
+            }
+        });
+        intervalValue.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                askInterval();
+            }
+        });
+        repeatOptions.addView(stepper);
 
-        // --- Por marca
-        root.addView(section("Una sola marca"));
-        spBrand = new Spinner(this);
-        List<String> brands = CodeBook.brands();
-        spBrand.setAdapter(new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_dropdown_item, brands));
-        root.addView(spBrand);
-        btnBrand = new Button(this);
-        btnBrand.setText("Mutear esta marca");
+        HorizontalScrollView presetScroll = new HorizontalScrollView(this);
+        presetScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (final int p : INTERVAL_PRESETS) {
+            TextView c = chip(formatDuration(p));
+            c.setTag(p);
+            c.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    setInterval(p);
+                }
+            });
+            presetChips.add(c);
+            presetRow.addView(c, chipLp());
+        }
+        presetScroll.addView(presetRow);
+        repeatOptions.addView(presetScroll);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(Theme.STROKE);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1)));
+        dlp.topMargin = dp(16);
+        dlp.bottomMargin = dp(12);
+        repeatOptions.addView(divider, dlp);
+
+        swOnlyOn = toggleRow(repeatOptions, "Repetir sin reactivar el sonido",
+                "En la mayoría de equipos, enviar mute otra vez devuelve el sonido. "
+                        + "Con esto activado, las repeticiones solo usan códigos que silencian "
+                        + "sin alternar (los cubren menos equipos).");
+        swOnlyOn.setChecked(prefs.getBoolean("onlyOn", true));
+        repeatCard.addView(repeatOptions);
+        root.addView(repeatCard, cardLp());
+
+        swRepeat.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                prefs.edit().putBoolean("repeat", checked).apply();
+                repeatOptions.setVisibility(checked ? View.VISIBLE : View.GONE);
+            }
+        });
+        swOnlyOn.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                prefs.edit().putBoolean("onlyOn", checked).apply();
+            }
+        });
+        repeatOptions.setVisibility(swRepeat.isChecked() ? View.VISIBLE : View.GONE);
+
+        // Tarjeta: mi equipo (marca)
+        LinearLayout brandCard = card();
+        brandCard.addView(Theme.text(this, "Mi equipo", 17, Theme.TEXT, true));
+        TextView brandSub = Theme.text(this, "Envía solo los códigos de una marca: es más rápido", 13, Theme.MUTED, false);
+        brandSub.setPadding(0, dp(2), 0, dp(12));
+        brandCard.addView(brandSub);
+
+        brandInput = new AutoCompleteTextView(this);
+        brandInput.setHint("Busca tu marca, p. ej. LG");
+        brandInput.setHintTextColor(Theme.MUTED);
+        brandInput.setTextColor(Theme.TEXT);
+        brandInput.setSingleLine(true);
+        brandInput.setThreshold(1);
+        brandInput.setBackground(Theme.outlined(Theme.SURFACE_2, Theme.STROKE, Math.max(1, dp(1)), dp(12)));
+        brandInput.setPadding(dp(14), dp(12), dp(14), dp(12));
+        brandInput.setAdapter(new ArrayAdapter<String>(this,
+                android.R.layout.simple_dropdown_item_1line, CodeBook.brands()));
+        brandInput.setText(prefs.getString("brand", ""));
+        brandInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                refreshBrand();
+            }
+        });
+        brandInput.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                hideKeyboard();
+                refreshBrand();
+            }
+        });
+        brandCard.addView(brandInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        HorizontalScrollView popScroll = new HorizontalScrollView(this);
+        popScroll.setHorizontalScrollBarEnabled(false);
+        popScroll.setPadding(0, dp(10), 0, 0);
+        LinearLayout popRow = new LinearLayout(this);
+        popRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (final String b : POPULAR_BRANDS) {
+            final String real = brandLookup.get(b.toLowerCase(Locale.ROOT));
+            if (real == null) continue;
+            TextView c = chip(real);
+            c.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    brandInput.setText(real);
+                    brandInput.setSelection(real.length());
+                    brandInput.dismissDropDown();
+                    hideKeyboard();
+                }
+            });
+            popRow.addView(c, chipLp());
+        }
+        popScroll.addView(popRow);
+        brandCard.addView(popScroll);
+
+        brandInfo = Theme.text(this, "", 13, Theme.MUTED, false);
+        brandInfo.setPadding(0, dp(10), 0, dp(10));
+        brandCard.addView(brandInfo);
+
+        btnBrand = primaryButton("Silenciar marca");
         btnBrand.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                String brand = (String) spBrand.getSelectedItem();
-                runSequence(CodeBook.select(true, true, true, true, brand), btnBrand,
-                        "Mutear esta marca");
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                if (running) {
+                    running = false;
+                    return;
+                }
+                String brand = resolvedBrand();
+                if (brand == null) return;
+                hideKeyboard();
+                runSequence(CodeBook.select(true, true, true, true, brand), brand);
             }
         });
-        root.addView(btnBrand);
-        root.addView(hint("La repetición también aplica a este botón."));
+        brandCard.addView(btnBrand, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+        root.addView(brandCard, cardLp());
 
-        // --- Código propio
-        root.addView(section("Código propio"));
-        root.addView(hint("Útil para marcas que no están en la lista. Valores en decimal o con 0x. "
-                + "S solo se usa en NEC, Pioneer y Aiwa; vacío = valor habitual."));
+        // Tarjeta: código manual (plegable)
+        LinearLayout advCard = card();
+        advancedHeader = Theme.text(this, "", 17, Theme.TEXT, true);
+        advancedHeader.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean show = advancedBody.getVisibility() != View.VISIBLE;
+                advancedBody.setVisibility(show ? View.VISIBLE : View.GONE);
+                updateAdvancedHeader();
+            }
+        });
+        advCard.addView(advancedHeader);
+
+        advancedBody = new LinearLayout(this);
+        advancedBody.setOrientation(LinearLayout.VERTICAL);
+        advancedBody.setVisibility(View.GONE);
+        TextView advHint = Theme.text(this, "Para marcas que no están en la lista. Valores en decimal o con 0x. "
+                + "S solo se usa en NEC, Pioneer y Aiwa; si lo dejas vacío se usa el valor habitual.", 13, Theme.MUTED, false);
+        advHint.setPadding(0, dp(8), 0, dp(12));
+        advancedBody.addView(advHint);
         spProto = new Spinner(this);
         spProto.setAdapter(new ArrayAdapter<String>(this,
                 android.R.layout.simple_spinner_dropdown_item, PROTOS));
-        root.addView(spProto);
-
+        spProto.setBackground(Theme.outlined(Theme.SURFACE_2, Theme.STROKE, Math.max(1, dp(1)), dp(12)));
+        advancedBody.addView(spProto, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        etD = number("D");
-        etS = number("S");
-        etF = number("F");
-        row.addView(etD, weight());
-        row.addView(etS, weight());
-        row.addView(etF, weight());
-        root.addView(row);
-
-        btnCustom = new Button(this);
-        btnCustom.setText("Enviar código");
+        row.setPadding(0, dp(10), 0, dp(10));
+        etD = numberField("D");
+        etS = numberField("S");
+        etF = numberField("F");
+        row.addView(etD, fieldLp(0));
+        row.addView(etS, fieldLp(dp(8)));
+        row.addView(etF, fieldLp(dp(8)));
+        advancedBody.addView(row);
+        btnCustom = secondaryButton("Enviar código");
         btnCustom.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                 sendCustom();
             }
         });
-        root.addView(btnCustom);
+        advancedBody.addView(btnCustom, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        advCard.addView(advancedBody);
+        updateAdvancedHeader();
+        root.addView(advCard, cardLp());
 
-        root.addView(hint("Úsalo en tus propios aparatos o con permiso de quien los usa."));
+        // Consejos
+        TextView tips = Theme.text(this,
+                "Apunta el borde superior del teléfono hacia los aparatos, a menos de 8 m y sin "
+                        + "obstáculos. Mantén la app abierta mientras envía.\n\n"
+                        + "Úsala en tus propios aparatos o con permiso de quien los usa.",
+                12, Theme.MUTED, false);
+        tips.setPadding(dp(4), dp(20), dp(4), 0);
+        root.addView(tips);
+
+        setCategory(category);
+        setInterval(intervalS);
+        refreshBrand();
         return scroll;
     }
 
-    private TextView label(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(14);
-        t.setTextColor(Color.DKGRAY);
+    // ------------------------------------------------------------------ fábricas de vistas
+
+    private TextView sectionLabel(String s) {
+        TextView t = Theme.text(this, s.toUpperCase(Locale.ROOT), 12, Theme.MUTED, true);
+        t.setLetterSpacing(0.08f);
+        t.setPadding(dp(2), dp(16), 0, dp(10));
         return t;
     }
 
-    private TextView section(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(18);
-        t.setTextColor(Color.BLACK);
-        t.setPadding(0, dp(24), 0, dp(6));
-        return t;
+    private TextView chip(String s) {
+        TextView c = Theme.text(this, s, 14, Theme.TEXT, true);
+        c.setPadding(dp(16), dp(8), dp(16), dp(8));
+        c.setMinHeight(dp(36));
+        Theme.styleChip(c, false, density);
+        return c;
     }
 
-    private TextView hint(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(13);
-        t.setTextColor(Color.DKGRAY);
-        t.setPadding(0, dp(4), 0, dp(8));
-        return t;
+    private LinearLayout.LayoutParams chipLp() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.rightMargin = dp(8);
+        return p;
     }
 
-    private EditText number(String hintText) {
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(18), dp(16), dp(18), dp(18));
+        c.setBackground(Theme.rounded(Theme.SURFACE, dp(20)));
+        return c;
+    }
+
+    private LinearLayout.LayoutParams cardLp() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = dp(16);
+        return p;
+    }
+
+    private LinearLayout.LayoutParams lp(int width, int top, int bottom) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        p.bottomMargin = bottom;
+        return p;
+    }
+
+    private LinearLayout.LayoutParams fieldLp(int left) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        p.leftMargin = left;
+        return p;
+    }
+
+    /** Fila con título, descripción y un interruptor a la derecha; toda la fila es pulsable. */
+    private Switch toggleRow(LinearLayout parent, String title, String subtitle) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(Theme.text(this, title, 16, Theme.TEXT, true));
+        TextView sub = Theme.text(this, subtitle, 13, Theme.MUTED, false);
+        sub.setPadding(0, dp(2), dp(12), 0);
+        texts.addView(sub);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        final Switch sw = new Switch(this);
+        if (Build.VERSION.SDK_INT >= 23) {
+            int[][] states = {{android.R.attr.state_checked}, {}};
+            sw.setThumbTintList(new ColorStateList(states, new int[]{Theme.ACCENT, Color.rgb(200, 205, 212)}));
+            sw.setTrackTintList(new ColorStateList(states, new int[]{Theme.ACCENT_SOFT, Theme.TRACK}));
+        }
+        row.addView(sw);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (sw.isEnabled()) sw.toggle();
+            }
+        });
+        parent.addView(row);
+        return sw;
+    }
+
+    private TextView roundIconButton(String s) {
+        TextView b = Theme.text(this, s, 22, Theme.TEXT, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Theme.rounded(Theme.SURFACE_2, dp(22)));
+        return b;
+    }
+
+    private TextView primaryButton(String s) {
+        TextView b = Theme.text(this, s, 16, Theme.ON_ACCENT, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Theme.rounded(Theme.ACCENT, dp(14)));
+        return b;
+    }
+
+    private TextView secondaryButton(String s) {
+        TextView b = Theme.text(this, s, 15, Theme.TEXT, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Theme.outlined(Theme.SURFACE_2, Theme.STROKE, Math.max(1, dp(1)), dp(14)));
+        return b;
+    }
+
+    private EditText numberField(String hint) {
         EditText e = new EditText(this);
-        e.setHint(hintText);
+        e.setHint(hint);
+        e.setHintTextColor(Theme.MUTED);
+        e.setTextColor(Theme.TEXT);
         e.setGravity(Gravity.CENTER);
         e.setSingleLine(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setBackground(Theme.outlined(Theme.SURFACE_2, Theme.STROKE, Math.max(1, dp(1)), dp(12)));
         return e;
     }
 
-    private LinearLayout.LayoutParams weight() {
-        return new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-    }
-
-    private LinearLayout.LayoutParams matchWrap(int top, int bottom) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = top;
-        lp.bottomMargin = bottom;
-        return lp;
+    private void setPrimaryEnabled(TextView b, boolean enabled) {
+        b.setEnabled(enabled);
+        b.setAlpha(enabled ? 1f : 0.4f);
     }
 
     private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
+        return Math.round(v * density);
+    }
+
+    private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private void hideKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null && brandInput != null) imm.hideSoftInputFromWindow(brandInput.getWindowToken(), 0);
+    }
+
+    // ------------------------------------------------------------------ estado de la interfaz
+
+    private void setCategory(int idx) {
+        category = idx;
+        prefs.edit().putInt("category", idx).apply();
+        for (int i = 0; i < categoryChips.length; i++) Theme.styleChip(categoryChips[i], i == idx, density);
+        updateCategoryInfo();
+    }
+
+    private void updateCategoryInfo() {
+        String hint = CATEGORY_HINTS[category];
+        if (categoryCounts[category] > 0) {
+            categoryInfo.setText(hint + "\n" + categoryCounts[category] + " códigos · "
+                    + formatDuration((int) Math.max(1, categoryMillis[category] / 1000)) + " aprox.");
+        } else {
+            categoryInfo.setText(hint);
+        }
+    }
+
+    /** Cuenta códigos y estima la duración de cada categoría en segundo plano. */
+    private void computeCategoryStats() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 5; i++) {
+                    List<CodeBook.Entry> l = selectCategory(i);
+                    long ms = 0;
+                    for (CodeBook.Entry e : l) ms += e.signal().totalMicros() / 1000 + PAUSE_MS;
+                    categoryCounts[i] = l.size();
+                    categoryMillis[i] = ms;
+                }
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateCategoryInfo();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private List<CodeBook.Entry> selectCategory(int c) {
+        boolean all = c == 0;
+        return CodeBook.select(all || c == 1, all || c == 2, all || c == 3, all || c == 4, null);
+    }
+
+    private void setInterval(int seconds) {
+        intervalS = clamp(seconds, 1, MAX_INTERVAL_S);
+        prefs.edit().putInt("interval", intervalS).apply();
+        intervalValue.setText(formatDuration(intervalS));
+        for (TextView c : presetChips) Theme.styleChip(c, ((Integer) c.getTag()) == intervalS, density);
+    }
+
+    private static int stepInterval(int v, boolean up) {
+        int step;
+        if (up) {
+            step = v < 5 ? 1 : v < 60 ? 5 : v < 600 ? 30 : v < 3600 ? 60 : 600;
+        } else {
+            step = v <= 5 ? 1 : v <= 60 ? 5 : v <= 600 ? 30 : v <= 3600 ? 60 : 600;
+        }
+        return clamp(up ? v + step : v - step, 1, MAX_INTERVAL_S);
+    }
+
+    /** Permite escribir un número exacto de segundos tocando el valor. */
+    private void askInterval() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(intervalS));
+        input.setSelectAllOnFocus(true);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Segundos entre repeticiones")
+                .setView(input)
+                .setPositiveButton("Listo", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        try {
+                            setInterval(Integer.parseInt(input.getText().toString().trim()));
+                        } catch (NumberFormatException e) {
+                            Toast.makeText(MainActivity.this, "Número inválido", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    static String formatDuration(int s) {
+        if (s < 60) return s + " s";
+        if (s < 3600) {
+            int m = s / 60, r = s % 60;
+            return r == 0 ? m + " min" : m + " min " + r + " s";
+        }
+        int h = s / 3600, m = (s % 3600) / 60;
+        return m == 0 ? h + " h" : h + " h " + m + " min";
+    }
+
+    private String resolvedBrand() {
+        String t = brandInput.getText().toString().trim();
+        if (t.isEmpty()) return null;
+        return brandLookup.get(t.toLowerCase(Locale.ROOT));
+    }
+
+    private void refreshBrand() {
+        String brand = resolvedBrand();
+        String typed = brandInput.getText().toString().trim();
+        if (brand != null) {
+            int n = CodeBook.select(true, true, true, true, brand).size();
+            brandInfo.setText(n + (n == 1 ? " código" : " códigos") + " para " + brand);
+            brandInfo.setTextColor(Theme.MUTED);
+            btnBrand.setText(running ? "Detener" : "Silenciar " + brand);
+            prefs.edit().putString("brand", brand).apply();
+        } else if (typed.isEmpty()) {
+            brandInfo.setText("Elige una marca de la lista o un atajo");
+            brandInfo.setTextColor(Theme.MUTED);
+            btnBrand.setText(running ? "Detener" : "Silenciar marca");
+        } else {
+            brandInfo.setText("No hay códigos para \"" + typed + "\". Prueba otra forma del nombre "
+                    + "o usa el código manual.");
+            brandInfo.setTextColor(Theme.WARN);
+            btnBrand.setText(running ? "Detener" : "Silenciar marca");
+        }
+        setPrimaryEnabled(btnBrand, hasEmitter() && (running || brand != null));
+    }
+
+    private void updateAdvancedHeader() {
+        boolean open = advancedBody.getVisibility() == View.VISIBLE;
+        advancedHeader.setText((open ? "▾  " : "▸  ") + "Código manual");
     }
 
     // ------------------------------------------------------------------ IR
@@ -267,17 +702,14 @@ public class MainActivity extends Activity {
 
     private void refreshEmitterState() {
         boolean ok = hasEmitter();
-        if (ok) {
-            status.setText("Emisor infrarrojo detectado. " + CodeBook.all().size()
-                    + " códigos de " + CodeBook.brands().size() + " marcas.");
-            status.setTextColor(Color.rgb(0, 120, 60));
-        } else {
-            status.setText("Este teléfono no tiene emisor infrarrojo; la app no puede enviar señales.");
-            status.setTextColor(Color.rgb(180, 0, 0));
-        }
-        btnAll.setEnabled(ok);
-        btnBrand.setEnabled(ok);
-        btnCustom.setEnabled(ok);
+        statusChip.setText(ok ? "● IR listo" : "● Sin IR");
+        statusChip.setTextColor(ok ? Theme.OK : Theme.WARN);
+        statusChip.setBackground(Theme.rounded(ok ? Theme.OK_SOFT : Theme.WARN_SOFT, dp(14)));
+        muteButton.setState(ok ? MuteButton.IDLE : MuteButton.DISABLED, 0, null, null);
+        muteButton.setEnabled(ok);
+        nowSending.setText(ok ? CodeBook.all().size() + " códigos de " + CodeBook.brands().size() + " marcas"
+                : "Este teléfono no tiene emisor infrarrojo, así que no puede enviar señales.");
+        setPrimaryEnabled(btnCustom, ok);
     }
 
     private int pickCarrier(int wanted) {
@@ -306,30 +738,39 @@ public class MainActivity extends Activity {
         }
     }
 
-    private int readInterval() {
-        try {
-            int v = Integer.parseInt(etInterval.getText().toString().trim());
-            return Math.max(1, Math.min(v, 24 * 3600));
-        } catch (NumberFormatException e) {
-            etInterval.setText(String.valueOf(DEFAULT_INTERVAL_S));
-            return DEFAULT_INTERVAL_S;
-        }
+    private void startCategory() {
+        runSequence(selectCategory(category), CATEGORY_NAMES[category]);
     }
 
-    private void showProgress(final String text) {
-        ui.post(new Runnable() {
+    private void post(Runnable r) {
+        ui.post(r);
+    }
+
+    private void showSending(final int state, final float progress, final String big,
+                             final String small, final String line) {
+        post(new Runnable() {
             @Override
             public void run() {
-                progress.setText(text);
+                muteButton.setState(state, progress, big, small);
+                nowSending.setText(line);
             }
         });
     }
 
-    private void runSequence(final List<CodeBook.Entry> list, final Button source, final String idleText) {
-        if (running) {          // un segundo toque detiene el envío
-            running = false;
-            return;
+    private void setBusy(boolean busy) {
+        for (TextView c : categoryChips) {
+            c.setEnabled(!busy);
+            c.setAlpha(busy ? 0.5f : 1f);
         }
+        swRepeat.setEnabled(!busy);
+        swOnlyOn.setEnabled(!busy);
+        brandInput.setEnabled(!busy);
+        setPrimaryEnabled(btnCustom, !busy && hasEmitter());
+        refreshBrand();
+    }
+
+    private void runSequence(final List<CodeBook.Entry> list, final String label) {
+        if (running) return;
         if (!hasEmitter()) {
             refreshEmitterState();
             return;
@@ -339,15 +780,15 @@ public class MainActivity extends Activity {
             return;
         }
 
-        final boolean repeat = cbRepeat.isChecked();
-        final int intervalS = readInterval();
+        final boolean repeat = swRepeat.isChecked();
+        final int waitS = intervalS;
         final List<CodeBook.Entry> repeatList;
-        if (repeat && cbOnlyOn.isChecked()) {
+        if (repeat && swOnlyOn.isChecked()) {
             repeatList = new ArrayList<CodeBook.Entry>();
             for (CodeBook.Entry e : list) if (e.discrete) repeatList.add(e);
             if (repeatList.isEmpty()) {
-                Toast.makeText(this, "Esta selección no tiene códigos \"mute ON\"; "
-                        + "se repetirán todos los códigos.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Esta selección no tiene códigos que silencien sin alternar; "
+                        + "las repeticiones enviarán todos los códigos.", Toast.LENGTH_LONG).show();
                 repeatList.addAll(list);
             }
         } else {
@@ -356,7 +797,9 @@ public class MainActivity extends Activity {
 
         running = true;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        setBusy(source, true, idleText);
+        setBusy(true);
+        muteButton.setState(MuteButton.RUNNING, 0, "0%", label);
+        nowSending.setText("Preparando…");
 
         new Thread(new Runnable() {
             @Override
@@ -369,10 +812,12 @@ public class MainActivity extends Activity {
                     cycle++;
                     List<CodeBook.Entry> current = cycle == 1 ? list : repeatList;
                     final int total = current.size();
-                    String prefix = repeat ? "Ciclo " + cycle + " · " : "";
+                    String cycleText = repeat ? "Ciclo " + cycle : label;
                     for (int i = 0; i < total && running; i++) {
                         CodeBook.Entry e = current.get(i);
-                        showProgress(prefix + "Enviando " + (i + 1) + "/" + total + ": " + e.brandLabel());
+                        int pct = Math.round(100f * i / total);
+                        showSending(MuteButton.RUNNING, (float) i / total, pct + "%", cycleText,
+                                (i + 1) + " de " + total + " · " + e.brandLabel());
                         IrCodec.Signal s = e.signal();
                         error = send(s);
                         if (error != null) break;
@@ -381,38 +826,45 @@ public class MainActivity extends Activity {
                     }
                     if (!repeat || error != null || !running) break;
 
-                    // Espera entre repeticiones, con cuenta regresiva.
-                    for (int left = intervalS; left > 0 && running; left--) {
-                        showProgress("Ciclo " + cycle + " terminado. Próxima repetición en "
-                                + left + " s (toca DETENER para parar).");
+                    for (int left = waitS; left > 0 && running; left--) {
+                        showSending(MuteButton.WAITING, (float) left / waitS, formatShort(left),
+                                "Próximo ciclo", "Ciclo " + cycle + " listo · " + sentTotal + " códigos enviados");
                         if (!sleepWhileRunning(1000)) break;
                     }
                 }
 
-                final boolean stoppedByUser = !running;
-                final long sentFinal = sentTotal;
+                final long sent = sentTotal;
                 final int cycles = cycle;
                 final String err = error;
+                final boolean completed = !repeat && running && err == null;
                 running = false;
-                ui.post(new Runnable() {
+                post(new Runnable() {
                     @Override
                     public void run() {
                         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                        setBusy(source, false, idleText);
+                        muteButton.setState(MuteButton.IDLE, 0, null, null);
+                        setBusy(false);
                         if (err != null) {
-                            progress.setText("Error al transmitir: " + err);
+                            nowSending.setText("Error al transmitir: " + err);
+                        } else if (completed) {
+                            nowSending.setText("Listo · " + sent + " códigos enviados (" + label + ")");
                         } else if (repeat) {
-                            progress.setText("Detenido: " + sentFinal + " códigos enviados en "
-                                    + cycles + (cycles == 1 ? " ciclo." : " ciclos."));
-                        } else if (stoppedByUser && sentFinal < list.size()) {
-                            progress.setText("Detenido tras " + sentFinal + " de " + list.size() + " códigos.");
+                            nowSending.setText("Detenido · " + sent + " códigos en " + cycles
+                                    + (cycles == 1 ? " ciclo" : " ciclos"));
                         } else {
-                            progress.setText("Listo: " + sentFinal + " códigos enviados.");
+                            nowSending.setText("Detenido · " + sent + " de " + list.size() + " códigos enviados");
                         }
                     }
                 });
             }
         }).start();
+    }
+
+    /** Texto corto para el centro del botón durante la espera. */
+    private static String formatShort(int s) {
+        if (s < 60) return s + "s";
+        if (s < 3600) return (s / 60) + ":" + String.format(Locale.ROOT, "%02d", s % 60);
+        return (s / 3600) + "h" + String.format(Locale.ROOT, "%02d", (s % 3600) / 60);
     }
 
     /** Duerme en tramos cortos para que DETENER responda enseguida. */
@@ -428,16 +880,6 @@ public class MainActivity extends Activity {
             return false;
         }
         return false;
-    }
-
-    private void setBusy(Button source, boolean busy, String idleText) {
-        btnAll.setEnabled(!busy || source == btnAll);
-        btnBrand.setEnabled(!busy || source == btnBrand);
-        btnCustom.setEnabled(!busy);
-        cbRepeat.setEnabled(!busy);
-        cbOnlyOn.setEnabled(!busy);
-        etInterval.setEnabled(!busy);
-        source.setText(busy ? "DETENER" : idleText);
     }
 
     private void sendCustom() {
@@ -470,7 +912,12 @@ public class MainActivity extends Activity {
                     default: sig = IrCodec.rca(d, f, 58000); break;
                 }
                 final String err = send(sig);
-                showProgress(err == null ? "Código enviado." : "Error al transmitir: " + err);
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        nowSending.setText(err == null ? "Código enviado" : "Error al transmitir: " + err);
+                    }
+                });
             }
         }).start();
     }

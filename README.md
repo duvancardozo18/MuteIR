@@ -10,13 +10,15 @@ También se puede abrir la carpeta en Android Studio y usar **Build → Build AP
 
 ## Cómo se usa
 
-- **Qué silenciar**: Todo, solo TV, solo audio (equipos, barras, parlantes), solo audio de carro, u otros sin clasificar.
-- **MUTEAR TODO**: envía los códigos en secuencia, empezando por los que comparten más marcas, así los primeros segundos cubren los equipos más comunes. Tiempos aproximados: TV ≈ 1,2 min, audio ≈ 2 min, carro ≈ 2 s, todo ≈ 6 min. Pulsa de nuevo para detener.
-- **Repetir**: marca "Repetir hasta que lo detenga" y escribe cada cuántos segundos repetir (de 1 s a 24 h). Muestra el ciclo y la cuenta regresiva. La app debe seguir abierta y en pantalla.
-- **Solo "mute ON" en repeticiones** (marcada por defecto): el primer ciclo envía todo y los siguientes solo los códigos que silencian sin reactivar el sonido. Si la desmarcas, cada repetición vuelve a alternar el sonido de los equipos con mute de tipo interruptor.
-- **Una sola marca**: envía solo los códigos de la marca elegida (también admite repetición).
-- **Código propio**: para marcas que no estén en la lista. Elige protocolo e ingresa D, S y F.
-- Apunta el borde superior del teléfono hacia los aparatos (hasta unos 8 m, con línea de vista).
+La pantalla tiene un diseño oscuro con tarjetas y guarda tus ajustes entre usos.
+
+- **Botón circular "Silenciar"**: envía los códigos de la categoría elegida. Mientras envía muestra un anillo con el porcentaje y el equipo actual; tócalo otra vez para detener. Arriba a la derecha, un indicador dice si el teléfono tiene emisor IR.
+- **Qué silenciar**: chips para Todo, TV, Audio, Carro u Otros. Debajo se ve cuántos códigos son y cuánto tarda aproximadamente (TV ≈ 1,2 min, audio ≈ 2 min, carro ≈ 2 s, todo ≈ 6 min). Los códigos que comparten más marcas van primero.
+- **Repetir automáticamente**: interruptor que despliega el intervalo. Ajusta con − y +, con los atajos (10 s, 30 s, 1 min, 5 min, 15 min) o tocando el número para escribir los segundos exactos (hasta 24 h). Entre ciclos, el botón muestra la cuenta regresiva.
+- **Repetir sin reactivar el sonido** (activado por defecto): el primer ciclo envía todo y los siguientes solo los códigos que silencian sin alternar. Si lo desactivas, cada repetición vuelve a alternar el sonido de los equipos con mute de tipo interruptor.
+- **Mi equipo**: busca tu marca con autocompletado o toca un atajo (LG, Samsung, Sony, JBL, Philips…). Muestra cuántos códigos tiene y envía solo esos, que es mucho más rápido. También respeta la repetición.
+- **Código manual** (plegable): para marcas que no estén en la lista. Elige protocolo e ingresa D, S y F.
+- Apunta el borde superior del teléfono hacia los aparatos (hasta unos 8 m, con línea de vista) y mantén la app abierta mientras envía.
 
 ## Límites que conviene saber
 
@@ -58,3 +60,5 @@ Edita `app/src/main/java/com/muteir/app/CodeBook.java` y agrega filas a `DATA`:
 - `IrCodec.java`: genera las señales de cada protocolo (sin dependencias de Android).
 - `CodeBook.java`: tabla de códigos y selección por tipo o marca.
 - `MainActivity.java`: interfaz, repetición y envío con `ConsumerIrManager`.
+- `MuteButton.java`: botón circular con anillo de progreso y cuenta regresiva.
+- `Theme.java`: colores y estilos (chips, tarjetas, botones).
