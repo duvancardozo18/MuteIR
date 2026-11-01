@@ -11,7 +11,7 @@ También se puede abrir la carpeta en Android Studio y usar **Build → Build AP
 ## Cómo se usa
 
 - **Qué silenciar**: Todo, solo TV, solo audio (equipos, barras, parlantes), solo audio de carro, u otros sin clasificar.
-- **MUTEAR TODO**: envía los códigos en secuencia, empezando por los que comparten más marcas, así los primeros segundos cubren los equipos más comunes. Tiempos aproximados: TV ≈ 25 s, audio ≈ 1,5 min, carro ≈ 2 s, todo ≈ 4 min. Pulsa de nuevo para detener.
+- **MUTEAR TODO**: envía los códigos en secuencia, empezando por los que comparten más marcas, así los primeros segundos cubren los equipos más comunes. Tiempos aproximados: TV ≈ 1,2 min, audio ≈ 2 min, carro ≈ 2 s, todo ≈ 6 min. Pulsa de nuevo para detener.
 - **Repetir**: marca "Repetir hasta que lo detenga" y escribe cada cuántos segundos repetir (de 1 s a 24 h). Muestra el ciclo y la cuenta regresiva. La app debe seguir abierta y en pantalla.
 - **Solo "mute ON" en repeticiones** (marcada por defecto): el primer ciclo envía todo y los siguientes solo los códigos que silencian sin reactivar el sonido. Si la desmarcas, cada repetición vuelve a alternar el sonido de los equipos con mute de tipo interruptor.
 - **Una sola marca**: envía solo los códigos de la marca elegida (también admite repetición).
@@ -27,13 +27,15 @@ También se puede abrir la carpeta en Android Studio y usar **Build → Build AP
 
 ## Fuentes de códigos
 
-La tabla tiene 1.826 códigos distintos de unas 720 marcas, sin duplicados:
+La tabla tiene 2.670 códigos distintos de unas 1.050 marcas, sin duplicados. Por marca: Sony 155, Samsung 45, LG 18, JBL 11 (cada código distinto suele cubrir muchos modelos; por ejemplo, casi todos los televisores LG usan el mismo código de mute).
 
 | Fuente | Qué aporta |
 |---|---|
 | [IRDB](https://github.com/probonopd/irdb) | Todas las categorías con botón de mute (TV, receptores, amplificadores, CD, radio, etc.) |
 | [Flipper-IRDB](https://github.com/Lucaslhm/Flipper-IRDB) | TV, barras de sonido, parlantes, receptores, CD, unidades de carro y sus colecciones convertidas de Pronto e IR Plus |
 | [SmartIR](https://github.com/smartHomeHub/SmartIR) | Códigos Broadlink de TV, barras de sonido y receptores |
+| [LIRC remotes](https://github.com/probonopd/lirc-remotes) | Espejo de la base de controles de LIRC, con códigos en formato Pronto |
+| [irext](https://github.com/TanJunYi/database) | Base abierta (MIT) de TV y equipos de audio, decodificada con [irext-core](https://github.com/TanJunYi/core) |
 
 Quedaron fuera los protocolos que la app aún no genera (RECS80, MCE, Mitsubishi, Proton y otros menos comunes).
 
