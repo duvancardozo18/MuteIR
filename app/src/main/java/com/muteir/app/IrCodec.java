@@ -86,6 +86,81 @@ public final class IrCodec {
         return new Signal(carrier, p);
     }
 
+    // ---------------------------------------------------------------- Pioneer
+
+    /** Pioneer: misma trama que NEC pero con portadora de 40 kHz. */
+    public static Signal pioneer(int d, int s, int f) {
+        return pulseDistance(40000, 16 * 564, 8 * 564, 564, 564, 1692, necWord(d, s, f, ~f), 32);
+    }
+
+    // ---------------------------------------------------------------- Aiwa
+
+    /** Aiwa: D:8, S:5, ~D:8, ~S:5, F:8, ~F:8 (42 bits, LSB primero). */
+    public static Signal aiwa(int d, int s, int f) {
+        long data = (d & 0xFFL)
+                | ((long) (s & 0x1F) << 8)
+                | ((long) (~d & 0xFF) << 13)
+                | ((long) (~s & 0x1F) << 21)
+                | ((long) (f & 0xFF) << 26)
+                | ((long) (~f & 0xFF) << 34);
+        return pulseDistance(38000, 16 * 550, 8 * 550, 550, 550, 3 * 550, data, 42);
+    }
+
+    // ---------------------------------------------------------------- Panasonic / Kaseikyo
+
+    /** Kaseikyo (Panasonic, Technics, Denon-K…): 6 bytes ya armados, LSB primero, 37 kHz. */
+    public static Signal kaseikyo(int[] bytes) {
+        long data = 0;
+        for (int i = 0; i < 6; i++) data |= (long) (bytes[i] & 0xFF) << (8 * i);
+        return pulseDistance(37000, 8 * 432, 4 * 432, 432, 432, 3 * 432, data, 48);
+    }
+
+    // ---------------------------------------------------------------- Denon / Sharp
+
+    /**
+     * Denon y Sharp: dos tramas de 15 bits sin cabecera, D:5, F:8, X:2 (LSB primero);
+     * la segunda lleva ~F. Denon usa X = 0 y 3, Sharp X = 1 y 2.
+     */
+    public static Signal denonSharp(int d, int f, int x1, int x2) {
+        List<Integer> out = new ArrayList<Integer>();
+        denonFrame(out, d, f, x1);
+        denonFrame(out, d, ~f, x2);
+        return new Signal(38000, toArray(out));
+    }
+
+    public static Signal denon(int d, int f) { return denonSharp(d, f, 0, 3); }
+
+    public static Signal sharp(int d, int f) { return denonSharp(d, f, 1, 2); }
+
+    private static void denonFrame(List<Integer> out, int d, int f, int x) {
+        int data = (d & 0x1F) | ((f & 0xFF) << 5) | ((x & 0x3) << 13);
+        for (int b = 0; b < 15; b++) {
+            out.add(264);
+            out.add(((data >> b) & 1) != 0 ? 7 * 264 : 3 * 264);
+        }
+        out.add(264);
+        out.add(165 * 264);
+    }
+
+    // ---------------------------------------------------------------- RCA
+
+    /** RCA: D:4, F:8, ~D:4, ~F:8, MSB primero. 58 kHz (o 38 kHz en la variante RCA-38). */
+    public static Signal rca(int d, int f, int carrier) {
+        int data = ((d & 0xF) << 20) | ((f & 0xFF) << 12) | ((~d & 0xF) << 8) | (~f & 0xFF);
+        List<Integer> out = new ArrayList<Integer>();
+        for (int frame = 0; frame < 2; frame++) {
+            out.add(8 * 460);
+            out.add(8 * 460);
+            for (int b = 23; b >= 0; b--) {
+                out.add(460);
+                out.add(((data >> b) & 1) != 0 ? 4 * 460 : 2 * 460);
+            }
+            out.add(460);
+            out.add(16 * 460);
+        }
+        return new Signal(carrier, toArray(out));
+    }
+
     // ---------------------------------------------------------------- Sony SIRC
 
     /**
