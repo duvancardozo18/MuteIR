@@ -5,17 +5,21 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Tabla de códigos de silencio (mute) para televisores y equipos de sonido.
+ * Tabla de códigos de silencio (mute) para televisores, equipos de sonido y audio de carro.
  *
- * Fuente: base de datos pública IRDB (github.com/probonopd/irdb), categorías
- * TV, receptores, amplificadores, barras de sonido y similares.
+ * Fuentes: bases públicas IRDB (github.com/probonopd/irdb) y Flipper-IRDB
+ * (github.com/Lucaslhm/Flipper-IRDB), categorías de TV, receptores, amplificadores,
+ * barras de sonido, parlantes, reproductores de CD y unidades de carro.
  *
- * Formato de cada fila:  marcas ; tipos ; protocolo ; D ; S ; F ; clase
+ * Formato de cada fila:  marcas ; tipos ; protocolo ; D ; S ; F ; clase [; extra]
  *   marcas    : una o varias marcas que usan ese mismo código, separadas por "/"
- *   tipos     : T = televisor, A = audio (puede traer ambos)
- *   protocolo : NEC, NECX, RC5, SONY12, SONY15, JVC
- *   D, S, F   : dispositivo, subdispositivo y función (comando) en decimal
+ *   tipos     : T = televisor, A = audio, C = audio de carro (pueden venir varios)
+ *   protocolo : NEC, NECX, RC5, RC6, SONY12, SONY15, JVC, RAW
+ *   D, S, F   : dispositivo, subdispositivo y función (comando) en decimal.
+ *               En RAW, D es la frecuencia de portadora en Hz.
  *   clase     : T = alterna silencio/sonido (toggle), D = "mute ON" discreto
+ *   extra     : NEC/NECX: cuarto byte de la trama si no es ~F.
+ *               RAW: duraciones ON/OFF en microsegundos separadas por comas.
  *
  * Para añadir códigos propios basta con agregar filas a DATA.
  */
@@ -27,29 +31,39 @@ public final class CodeBook {
         public final String[] brands;
         public final boolean tv;
         public final boolean audio;
+        public final boolean car;
         public final boolean discrete;
         public final String proto;
         public final int d, s, f;
+        /** Cuarto byte NEC explícito, o -1 si es ~F. */
+        public final int g;
+        /** Patrón crudo para RAW, o null. */
+        public final int[] raw;
 
-        Entry(String[] brands, boolean tv, boolean audio, boolean discrete,
-              String proto, int d, int s, int f) {
+        Entry(String[] brands, String types, boolean discrete, String proto,
+              int d, int s, int f, int g, int[] raw) {
             this.brands = brands;
-            this.tv = tv;
-            this.audio = audio;
+            this.tv = types.indexOf('T') >= 0;
+            this.audio = types.indexOf('A') >= 0;
+            this.car = types.indexOf('C') >= 0;
             this.discrete = discrete;
             this.proto = proto;
             this.d = d;
             this.s = s;
             this.f = f;
+            this.g = g;
+            this.raw = raw;
         }
 
         public IrCodec.Signal signal() {
-            if ("NEC".equals(proto)) return IrCodec.nec(d, s, f);
-            if ("NECX".equals(proto)) return IrCodec.necx(d, s, f);
+            if ("NEC".equals(proto)) return g >= 0 ? IrCodec.nec(d, s, f, g) : IrCodec.nec(d, s, f);
+            if ("NECX".equals(proto)) return g >= 0 ? IrCodec.necx(d, s, f, g) : IrCodec.necx(d, s, f);
             if ("RC5".equals(proto)) return IrCodec.rc5(d, f, false);
+            if ("RC6".equals(proto)) return IrCodec.rc6(d, f);
             if ("SONY12".equals(proto)) return IrCodec.sony(d, f, 12, 3);
             if ("SONY15".equals(proto)) return IrCodec.sony(d, f, 15, 3);
             if ("JVC".equals(proto)) return IrCodec.jvc(d, f);
+            if ("RAW".equals(proto)) return IrCodec.raw(d, raw);
             throw new IllegalStateException("Protocolo desconocido: " + proto);
         }
 
@@ -64,37 +78,50 @@ public final class CodeBook {
     }
 
     private static final String[] DATA = {
-    "ADLER/Vivax;T;NEC;2;253;7;T",
-    "ADS;A;NEC;0;255;89;T",
-    "AMC;A;NEC;7;252;130;T",
-    "ANITECH/Carver/Loewe/Magnavox/Philips;AT;RC5;0;0;13;T",
-    "AOC;T;NEC;0;189;4;T",
     "Acesonic;A;NEC;5;122;75;T",
+    "Adastra;A;NEC;0;255;68;T",
+    "Adcom;A;NEC;26;229;130;T",
     "Adcom;A;NEC;26;229;81;T",
     "Adcom;A;NEC;26;229;95;T",
-    "Adcom;A;NEC;26;229;130;T",
     "Adcom;A;NEC;26;232;86;D",
+    "ADLER/Vivax;T;NEC;2;253;7;T",
+    "ADS;A;NEC;0;255;89;T",
+    "AEG;A;NEC;0;255;1;T",
     "Aesthetix;A;RC5;16;0;7;T",
-    "Aiwa/CIS BOX/Sony;A;SONY12;16;0;20;T",
+    "Aiwa/CIS BOX/Sony;AT;SONY12;16;0;20;T",
+    "Akai/Bauhn;T;NEC;1;114;92;T",
+    "Amazon/AmazonBasics/Bolva/Dual/Element/Telefunken/Toshiba/Westinghouse;T;NEC;2;125;76;T",
+    "Amazon;A;NEC;1;254;140;T",
+    "AMC;A;NEC;7;252;130;T",
+    "Android;T;NEC;1;254;65;T",
+    "ANITECH/Carver/Crown/Grundig/Kendo/Loewe/Magnavox/PDi/Philips/SEG/ViewSonic/Waltham/Watson/Yamaha;AT;RC5;0;0;13;T",
+    "AOC/Philips;T;NEC;0;189;4;T",
     "Apple/iPort;A;NEC;1;222;17;T",
     "Aragon;A;RC5;31;0;38;T",
+    "Arcam/ASR/Audio Control/Ayre/B.A.T/CambridgeAudio/Electrocompaniet/Gryphon/Harman Kardon/Krell/Linn/Marantz/Myryad/Philips/Q Acoustics/Rega;A;RC5;16;0;13;T",
     "Arcam/Audio Control;A;RC5;16;0;13;D",
-    "Arcam/Audio Control/Ayre/B.A.T/Electrocompaniet/Gryphon/Harman Kardon/Krell/Linn/Marantz/Myryad/Philips/Rega;A;RC5;16;0;13;T",
+    "Arcam/Cambridge Audio/Meridian;A;RC5;19;0;13;T",
     "Arcam;A;RC5;16;0;119;D",
     "Arcam;A;RC5;16;0;119;T",
-    "Arcam/Cambridge Audio/Meridian;A;RC5;19;0;13;T",
     "Architectural Audio;A;NECX;130;130;19;T",
     "Atlantic Technology/Fosgate;A;NEC;64;64;72;T",
+    "Audac/Bauhn/TCL;A;NEC;134;255;29;T",
     "Audio Access;A;NEC;133;83;143;T",
     "Audio Refinement;A;RC5;20;0;29;T",
     "Audio Research;A;RC5;7;0;27;T",
+    "Audioengine;A;NEC;0;253;3;T",
+    "Auna;A;NEC;4;251;6;T",
+    "AWA/BBK;T;NEC;0;223;8;T",
+    "Baird/Bomaker/Cranker/Kogan/Nevir;AT;NEC;1;254;23;T",
+    "Bestisan;A;NEC;41;161;155;T",
+    "BGH;T;NEC;0;191;21;T",
+    "Blaupunkt/Denver/Sharp;T;NEC;0;127;80;T",
+    "Blitzwolf;T;NEC;160;183;175;T",
     "BnK Components;A;NEC;11;79;3;T",
     "BnK Components;A;NEC;27;78;3;T",
-    "Bose;A;NEC;186;1;1;T",
-    "Bose;A;NEC;186;75;1;T",
-    "Bose;A;NEC;186;85;1;T",
+    "Bose/Philips;A;NEC;186;75;1;T",
     "Bose;A;NEC;186;133;1;T",
-    "Bose;A;NEC;186;160;1;T",
+    "Bose;A;NEC;186;160;1;T;253",
     "Bose;A;NEC;186;161;1;T",
     "Bose;A;NEC;186;162;1;T",
     "Bose;A;NEC;186;163;1;T",
@@ -126,93 +153,257 @@ public final class CodeBook {
     "Bose;A;NEC;186;190;1;T",
     "Bose;A;NEC;186;190;77;T",
     "Bose;A;NEC;186;191;1;T",
+    "Bose;A;NEC;186;1;1;T",
     "Bose;A;NEC;186;213;1;T",
     "Bose;A;NEC;186;229;1;T",
-    "CIS BOX/Sony;T;SONY12;1;0;20;T",
-    "CIS BOX;A;SONY12;17;0;20;T",
-    "CIS BOX;A;SONY15;121;0;20;T",
+    "Bose;A;NEC;186;85;1;T",
+    "Bose;A;RAW;38000;0;0;T;1014,1477,507,514,488,508,484,512,490,505,487,509,483,513,489,507,485,1480,514,1477,517,1475,509,1483,511,1480,514,1477,517,1475,509,1482,512,508,484,50774,1004,1486,508,513,489,507,485,511,491,504,488,508,484,513,489,505,487,1479,515,1476,508,1484,510,1481,513,1478,516,1475,509,1482,512,1480,514,507,485,50771,1007,1507,487,509,483,513,489,507,485,511,481,515,487,508,484,513,489,1502,482,1483,511,1481,513,1479,515,1476,508,1484,510,1481,513,1478,516,506,486",
+    "Bose;A;RAW;38000;0;0;T;976,1508,481,514,481,514,481,515,480,515,480,517,478,515,480,514,481,1514,480,1515,479,1514,480,1516,478,1514,479,1515,478,1543,450,1515,479,515,480,50695,977,1515,475,514,481,518,477,515,480,515,480,515,480,516,479,513,482,1514,480,1516,478,1513,481,1513,481,1513,481,1515,479,1515,479,1516,479,515,480",
+    "Bose;AT;NEC;186;160;1;T",
+    "Brandt;T;RAW;38000;0;0;T;9305,4503,660,498,690,470,688,470,687,473,635,524,635,524,635,1657,634,525,663,1629,662,1630,659,1655,609,1682,609,1682,609,1682,633,525,635,1657,634,525,634,525,634,526,633,527,632,1660,631,528,632,528,631,528,631,1661,631,1661,631,1661,631,1660,631,528,631,1661,631,1661,630,1661,630,40849,9309,2243,631,98361,9313,2244,631",
+    "BrandUnknown/Craig;A;NEC;32;223;8;T",
+    "BrandUnknown/Creative;A;NEC;131;34;12;T",
+    "BrandUnknown;A;NEC;53;202;81;T",
+    "Bumpboxx;A;NEC;0;255;69;T",
+    "Bush/ContinentalEdison/Digihome/EdenWood/FINLUX/Gogen/JVC/Medion/Technika/Telefunken/Toshiba;T;RC5;1;0;13;T",
+    "Bush;T;NEC;8;247;223;T",
     "Calypso;A;SONY12;17;0;56;D",
     "Cambridge Audio;A;NEC;192;63;0;T",
-    "Cambridge Audio;A;RC5;16;0;75;T",
     "Cambridge Audio;A;RC5;16;0;102;D",
+    "Cambridge Audio;A;RC5;16;0;75;T",
+    "Canton;A;NEC;0;251;30;T",
     "Carver;A;NEC;135;123;91;T",
     "Cary Audio Design;A;RC5;19;0;121;T",
+    "CCE;T;NEC;4;251;18;T",
+    "CIS BOX/Sceptre/Sony;AT;SONY12;1;0;20;T",
+    "CIS BOX;A;SONY12;17;0;20;T",
+    "CIS BOX;A;SONY15;121;0;20;T",
     "Citation/Fosgate/Harman Kardon/JBL;A;NEC;132;66;80;T",
     "Classe Audio;A;RC5;25;0;13;T",
     "Classe Audio;A;RC5;25;0;33;T",
     "Coby;T;NEC;0;127;76;T",
+    "Comhear/Yarra;A;NEC;10;29;3;T",
+    "Como Audio;A;NEC;119;136;243;T",
+    "ContinentalEdison/Neo/Platinum/Telefunken;T;NEC;0;127;22;T",
+    "ContinentalEdison/Pioneer;AT;NEC;0;127;92;T",
+    "ContinentalEdison;T;NEC;64;191;20;T",
+    "Craig/DollarTec BT5AmpBoard/MCM Custom Audio/PowerAcoustik/V-TAC;AC;NEC;0;255;71;T",
+    "Craig/iLive;A;NEC;0;255;30;T",
+    "Craig;A;NEC;32;223;31;T",
+    "Creative/Logitech;A;NEC;8;247;22;T",
+    "Creative;A;NEC;32;223;30;T",
     "Crestron/Imerge;A;RC5;14;0;11;T",
-    "D-LINK;A;NEC;8;230;26;T",
+    "Crown/Elements/Erisson/Furrion/Sankey;T;NEC;32;223;83;T",
     "D-LINK;A;NEC;18;37;30;T",
-    "Emerson;T;NEC;135;34;243;T",
-    "Fisher;A;NEC;54;200;92;T",
+    "D-LINK;A;NEC;8;230;26;T",
+    "Daewoo;T;NEC;128;127;208;T",
+    "Denon;A;RAW;38000;0;0;T;275,762,271,1800,277,786,278,784,249,813,241,795,248,814,219,817,247,789,254,1818,249,1824,274,1798,279,1820,278,759,274,788,245,43887,274,789,275,1798,279,783,250,812,252,784,249,1823,274,1798,279,1820,247,1826,271,765,278,809,224,812,252,784,249,1823,275,1798,279,43880,281,782,251,1821,277,760,273,789,244,818,246,790,253,808,246,791,252,809,224,1822,275,1797,280,1819,248,1825,273,790,253,808,246",
+    "Devant/Hisense;T;NEC;0;191;14;T",
+    "Douk Audio;A;NEC;170;51;71;T;255",
+    "Dual;C;NEC;8;247;72;T",
+    "DutchOriginals;A;NEC;0;255;9;T",
+    "Dynex/Insignia/RCA;T;NEC;134;5;14;T",
+    "DYON/Wbox;T;NEC;64;64;15;T",
+    "Eastern;A;NEC;160;95;24;T",
+    "Edifier;A;NEC;120;14;24;T",
+    "Edifier;A;NEC;120;14;9;T",
+    "Edifier;A;NEC;16;231;0;T",
+    "Edifier;A;NEC;16;231;1;T",
+    "Edifier;A;NEC;16;231;26;T",
+    "Edifier;A;NEC;16;231;43;T",
+    "Edifier;A;NEC;16;231;65;T",
+    "Elac;A;NEC;0;255;85;T",
+    "Emerson/Funai;T;NEC;132;224;100;T",
+    "Emerson/Magnavox;T;NEC;135;34;243;T",
+    "Emotiva;A;NEC;0;121;153;T",
+    "Enseo;T;NEC;110;145;4;T",
+    "Fetch;T;NEC;100;70;208;T",
     "Fisher/Sanyo;T;NEC;56;199;24;T",
+    "Fisher;A;NEC;54;200;92;T",
+    "Fisher;A;NECX;162;162;160;T",
+    "Fluance;A;NEC;63;92;21;T",
+    "Fosi Audio;A;NEC;250;1;2;T",
+    "Fossi Audio;A;NEC;234;130;117;T",
     "Gericom;T;NEC;3;252;3;T",
-    "Harman Kardon;A;NEC;128;112;193;T",
+    "Grandin/Kogan/Strong/Supra/Toshiba;T;NEC;64;191;16;T",
+    "Grandin;T;NEC;128;127;16;T",
+    "Grundig/TaoTronics/TCL;A;NEC;217;20;110;T",
+    "Grundig;A;NEC;48;252;12;T",
+    "Grundig;T;RAW;38000;0;0;T;602,2559,603,452,604,452,604,453,604,452,604,451,605,453,603,452,604,454,603,452,604,19747,601,2560,602,454,602,980,601,455,601,456,600,456,600,455,601,456,600,457,599,456,600,116184,604,2558,605,452,604,978,603,453,603,452,604,452,604,452,604,451,605,453,603,452,604,116254,604,2557,605,452,604,451,605,450,606,451,605,451,605,451,605,452,605,452,604,452,604",
+    "Grundig;T;RAW;38000;0;0;T;612,2551,613,441,615,440,613,442,614,440,613,441,615,440,614,440,615,439,615,440,615,19750,615,2551,614,439,614,967,616,439,615,439,615,441,615,439,616,437,617,440,615,438,616,116327,611,2551,613,442,613,969,614,440,612,443,613,441,613,440,614,442,611,442,614,441,614,116326,615,2549,616,439,614,439,617,439,614,440,616,438,616,439,617,438,616,439,617,438,615",
+    "Grundig;T;RAW;38000;0;0;T;846,826,847,797,1723,837,846,826,847,826,847,826,846,826,846,826,846,1641,847,827,1717,1631,867,85430,845,827,845,827,1718,813,869,805,867,806,867,808,865,809,864,809,864,1624,864,832,1689,1635,863",
+    "Grundig;T;RAW;38000;0;0;T;896,782,895,784,1733,785,896,785,868,812,894,784,920,762,871,812,918,1605,893,787,1735,1629,892,84752,893,784,895,781,1735,762,919,783,895,786,897,783,896,785,896,786,895,1625,897,784,1738,1625,896,84727,916,784,896,781,1736,785,897,783,896,784,896,785,897,784,895,785,897,1624,897,783,1737,1627,897",
+    "Grundig;T;RAW;38000;0;0;T;920,772,920,772,1771,768,920,771,920,772,920,771,948,748,948,743,948,1590,946,746,1795,1613,919,85291,892,799,893,799,1767,772,916,777,914,778,914,779,913,783,913,779,913,1625,913,780,1762,1623,912",
+    "GuestTek/Haier/Hisense/Hotels/LG/LXI/Memorex/Proton/Sharp/SkyVue/Vizio;T;NEC;4;251;9;T",
+    "GVA;T;NEC;0;127;90;T",
+    "Harman Kardon/JBL;A;NEC;128;112;193;T",
+    "Harman Kardon;A;NEC;134;118;211;T",
     "Harman Kardon;A;NEC;134;118;42;T",
-    "Hitachi;T;NEC;80;173;5;T",
+    "Hisense;A;NEC;4;251;33;T",
+    "Hisense;T;RAW;38000;0;0;T;9020,4375,657,450,656,451,654,1566,656,451,655,451,653,453,626,480,653,452,655,1567,654,1568,654,454,651,1568,654,1568,654,1569,653,1570,651,1572,650,1595,626,479,626,480,625,1597,624,482,624,482,624,483,623,483,623,483,623,1599,623,1599,623,483,623,1599,623,1599,623,1599,623,1599,623,39900,8912,2136,623",
     "Hitachi/Marantz/Yamaha;AT;NEC;80;175;11;T",
+    "Hitachi;A;NEC;91;164;136;T",
+    "Hitachi;T;NEC;80;173;5;T",
+    "Hitachi;T;NEC;80;175;16;T",
+    "Hitachi;T;RC5;3;0;13;T",
+    "Hotels/LG;T;NEC;105;105;14;T",
+    "IBIZA Sound;A;NEC;0;255;29;T",
     "InFocus;T;NEC;7;248;145;T",
-    "Insignia;T;NEC;134;5;14;T",
-    "Integra;A;NEC;210;17;5;T",
+    "Integra/Onkyo/Onkyo Integra;A;NEC;210;109;5;T",
+    "Integra/Onkyo;A;NEC;210;17;5;T",
+    "Integra;A;NEC;210;108;132;D",
+    "Integra;A;NEC;210;109;204;T",
     "Integra;A;NEC;210;18;132;D",
     "Integra;A;NEC;210;21;5;T",
     "Integra;A;NEC;210;22;132;D",
-    "Integra;A;NEC;210;108;132;D",
-    "Integra/Onkyo/Onkyo Integra;A;NEC;210;109;5;T",
-    "Integra;A;NEC;210;109;204;T",
     "IntelliNet Controls/Sonance;A;NEC;0;90;7;T",
+    "JBL/JVC;A;NEC;2;189;173;T",
     "JBL/Lexicon;A;NEC;130;11;21;T",
-    "JVC;AT;JVC;3;0;28;T",
+    "JBL;A;NEC;0;255;0;T",
+    "JBL;A;NEC;134;255;42;T",
+    "JBL;A;NEC;64;175;25;T",
+    "JVC/PrismPlus/Strong;T;NECX;14;14;13;T",
+    "JVC/Strong;AT;NEC;1;254;8;T",
     "JVC;A;JVC;163;0;28;T",
+    "JVC;AT;JVC;3;0;28;T",
+    "JVC;C;NEC;185;67;22;T",
+    "JVC;T;RAW;38000;0;0;T;8506,4232,528,1591,528,1591,528,526,528,526,528,528,526,526,528,527,527,526,528,526,528,526,528,1591,528,1592,527,1591,528,525,529,526,528,526,527,23593,528,1591,528,1592,527,526,528,526,528,526,528,526,529,527,527,528,526,525,529,527,527,1591,528,1591,528,1591,528,526,528,526,528,526,527",
+    "Kanto YU;A;NEC;0;255;20;T",
+    "KEF;A;NEC;128;127;4;T",
     "Kenwood/Sunfire;A;NEC;184;0;156;T",
     "Kenwood;A;NEC;184;71;156;T",
+    "Kenwood;C;NEC;185;70;22;T",
     "Kinergetics Research;A;RC5;28;0;32;T",
+    "Klipsch/Promethean;A;NEC;128;127;1;T",
+    "Klipsch;A;NEC;2;253;13;T",
+    "Kraft;T;NEC;1;62;11;T",
     "Krell;A;RC5;28;0;7;T",
-    "LG;T;NEC;1;1;10;T",
-    "LG/LXI/Memorex/Proton;T;NEC;4;251;9;T",
-    "LG;A;NECX;44;44;31;T",
+    "Larksound;A;NEC;48;15;9;T",
     "Lexicon;A;NEC;133;2;21;T",
+    "LG/Samsung;A;NECX;44;44;31;T",
+    "LG;A;NECX;16;16;31;T",
+    "LG;T;NEC;1;1;10;T",
+    "LG;T;NEC;4;244;9;T",
+    "LG;T;RAW;38000;0;0;T;9097,4402,685,475,659,475,658,1609,657,477,656,480,653,480,654,480,653,481,653,1615,653,1614,654,481,653,1615,653,1615,653,1615,653,1615,653,1615,653,1615,653,481,652,481,653,1616,652,482,652,482,652,482,652,482,652,482,652,1616,652,1616,651,482,652,1617,651,1617,651,1640,628,1640,628,39937,9097,2167,652",
+    "LodgeNet;T;NEC;133;124;151;T",
     "Loewe;T;RC5;0;0;64;T",
+    "Logitech;A;NEC;2;160;234;T",
     "Luxman;A;NEC;204;51;91;T",
+    "Magnavox;T;NEC;131;122;9;T;0",
+    "Manta/RCA;T;NEC;160;95;28;T",
+    "Manta;T;NEC;0;191;1;T",
     "Marantz/NEC;T;NEC;24;231;9;T",
     "Marantz;A;NEC;176;79;81;T",
+    "Marantz;A;RAW;38000;0;0;T;902,874,1786,1768,1792,876,904,870,898,876,902,872,896,878,902,1758,900,876,1794,1758,902",
     "Marantz;A;RC5;14;0;13;T",
     "Marantz;A;RC5;18;0;42;T",
+    "Matsui;T;NECX;23;23;21;T",
     "Maxx;T;NEC;96;159;69;T",
     "McIntosh;A;NEC;202;85;70;T",
+    "Medion;T;NEC;25;230;86;T",
+    "Microlab;A;NEC;1;254;2;T",
+    "Mivar;T;NEC;0;251;15;T",
     "NAD;A;NEC;135;124;148;T",
-    "NEC;T;NEC;4;251;10;T",
-    "NEC;A;NEC;26;197;9;T",
-    "Nakamichi;A;NEC;92;163;1;T",
-    "Nakamichi;A;NEC;92;163;129;T",
+    "Naim;A;RC5;21;0;13;T",
     "Nakamichi;A;NEC;130;93;12;T",
     "Nakamichi;A;NEC;186;69;1;T",
+    "Nakamichi;A;NEC;92;163;129;T",
+    "Nakamichi;A;NEC;92;163;1;T",
+    "NEC;A;NEC;26;197;9;T",
+    "NEC;T;NEC;4;251;10;T",
+    "NEC;T;NEC;56;199;4;T",
+    "Oky;T;RAW;38000;0;0;T;8953,4403,601,417,701,516,602,515,602,411,706,515,603,515,575,1635,603,514,628,1553,628,1609,600,1583,627,1606,598,1610,601,1608,600,495,624,1607,599,516,603,515,601,517,572,547,599,1608,599,518,601,516,598,545,573,1610,573,1637,572,1636,597,1612,599,518,600,1610,598,1610,599,1611,598,39250,8972,2171,599,94711,8976,2167,602,94731,8955,2168,602,94737,8927,2198,598",
+    "Onkyo;A;NEC;210;3;5;T",
+    "Onn/Philips/RCA/Sanyo/TCL;T;NEC;234;199;32;T",
+    "Onn;A;NEC;131;34;21;T",
+    "Panasonic;T;NECX;62;62;13;T",
+    "Panasonic;T;RAW;38000;0;0;T;3537,1660,458,441,429,1311,430,442,428,442,428,442,428,442,428,442,428,442,428,442,428,442,428,442,453,417,453,417,453,1287,453,420,449,422,447,447,423,448,422,448,422,448,422,448,422,448,422,448,422,1319,422,448,422,447,423,448,422,448,422,448,422,448,422,448,422,448,423,448,422,1319,422,448,422,448,423,1319,422,1319,423,448,422,448,422,448,422,1319,422,448,422,448,422,1319,422,1319,422,448,422,1319,422",
+    "Panasonic;T;RAW;38000;0;0;T;3554,1678,495,403,468,1248,495,403,497,374,497,375,497,374,497,374,497,375,496,375,496,375,495,377,493,378,492,380,490,1254,489,383,488,383,489,383,488,383,488,383,488,383,489,383,488,383,489,383,488,1255,488,383,488,384,488,383,488,384,487,384,487,384,487,384,488,384,488,384,487,1256,487,384,488,384,487,1256,488,1256,488,384,487,384,487,384,488,1256,487,384,488,384,487,1257,487,1257,487,385,486,1257,487",
+    "Parasound/SiriusXM;A;RC5;27;0;13;T",
     "Parasound;A;NEC;3;240;143;T",
     "Parasound;A;NEC;3;240;200;T",
     "Parasound;A;NEC;3;240;201;T",
-    "Parasound;A;RC5;27;0;13;T",
+    "Pheanoo;A;NEC;131;182;67;T",
+    "Philips;A;RC6;16;0;13;T",
+    "Philips;A;RC6;32;0;13;T",
+    "Philips;A;RC6;4;0;44;T",
+    "Philips;T;RC6;0;0;13;T",
     "Pioneer;A;NEC;165;90;81;D",
+    "Pioneer;C;RAW;38000;0;0;T;8458,4238,496,1608,498,548,498,1608,499,1610,497,548,498,1609,498,550,496,1610,497,549,497,1609,498,548,498,548,498,1609,498,548,498,1608,499,574,472,1608,499,549,497,547,499,1608,499,1609,498,549,497,547,499,550,496,548,498,1608,498,1608,498,548,498,547,499,1609,498,1610,497,1608,499,25503,8459,4237,497,1609,498,1608,499,1610,496,1609,498,549,497,1611,496,548,497,1608,499,548,498,549,497,550,496,574,472,1609,498,547,499,1610,497,549,497,547,499,548,498,547,499,549,497,1610,497,1609,498,548,498,547,499,1609,498,1609,498,1611,496,1609,498,549,497,547,499,1608,499,1611,496",
+    "Pioneer;C;RAW;38000;0;0;T;8492,4198,544,1562,545,525,518,1563,544,1561,546,524,519,1562,545,500,543,1562,545,500,543,1563,544,526,517,528,515,1565,542,528,515,1566,541,504,539,1566,541,504,539,532,521,1559,538,1568,539,530,513,533,520,524,519,527,516,1564,543,1563,544,526,517,528,515,1566,541,1564,543,1563,544,25438,8499,4194,547,1559,538,1569,538,1568,539,1566,541,530,513,1568,539,531,522,1559,538,532,521,524,519,526,517,529,514,1567,540,530,513,1568,539,531,522,523,520,526,517,528,515,531,522,1558,539,1568,539,531,522,523,520,1561,546,1559,538,1568,539,1567,540,530,513,533,520,1560,547,1559,538",
+    "Pioneer;C;RAW;38000;0;0;T;8533,4256,523,1599,629,394,710,1412,711,1439,689,358,686,1441,682,370,683,1440,686,358,684,1445,675,377,675,377,675,1447,679,374,676,1420,701,377,681,372,524,528,524,1571,657,1464,551,502,657,422,630,422,524,529,524,24857,3895,24811,3796,24833,7333,24893,8532,4256,523,1573,550,528,524,1571,656,1466,657,423,525,1571,551,528,525,1572,550,502,551,1598,524,528,525,502,551,1598,524,528,525,1598,524,529,524,502,551,528,524,1597,524,1598,524,503,549,529,524,528,524,529,523,1598,524,1598,524,529,524,528,524,1598,524,1598,524,1598,524,1597,525",
+    "PolkAudio;A;NEC;200;145;32;T",
+    "Pyle;A;NEC;0;255;11;T",
+    "Quantis;A;NEC;0;239;3;T",
+    "RCA;A;NEC;138;117;78;T",
+    "Rio;A;NEC;130;19;128;T",
     "RME;A;NEC;18;52;46;T",
-    "Samsung;T;NECX;7;7;15;T",
+    "Roberts;A;NECX;164;164;27;T",
+    "Samsung/Viore;AT;NECX;7;7;15;T",
+    "Samsung;A;RAW;38000;0;0;T;3305,1907,409,1178,411,1177,412,442,409,418,433,447,415,439,412,1176,413,441,410,1177,412,1176,413,441,410,443,408,1180,409,445,406,1181,408,446,416,1172,406,448,413,440,411,442,409,445,406,447,414,439,412,442,409,444,407,447,414,1173,405,449,413,441,410,443,408,446,405,448,413,1174,415,440,411,442,409,1178,411,1177,412,1177,412,442,409,444,407,447,415,439,412,441,410,444,407,1180,409,445,406,448,414,440,411,41125,3303,3347,360,42906,3308,3315,382",
+    "Samsung;A;RAW;38000;0;0;T;4489,4514,472,531,472,531,472,530,473,530,473,1536,470,1534,473,531,472,532,471,1534,472,1535,471,1535,471,1534,472,532,471,530,473,532,471,530,473,4545,471,531,472,530,473,532,471,531,472,1535,471,531,472,531,472,532,471,1535,471,1537,470,1535,472,531,472,530,473,1534,472,1535,471,1535,471,533,470,533,470,531,472,1535,471",
+    "Samsung;A;RAW;38000;0;0;T;4553,4467,550,459,546,464,541,469,547,464,520,1479,521,1477,544,492,524,486,498,1475,515,1484,516,1482,518,1481,540,496,520,490,515,495,521,490,494,4488,550,486,519,491,525,486,519,491,493,1479,542,494,522,489,516,494,490,1482,518,1481,519,1480,541,494,522,489,495,1478,522,1476,514,1485,547,489,516,494,522,489,495,1477,544",
+    "Sennheiser;A;RC5;19;0;12;T",
+    "Sharp;T;NEC;40;215;16;T",
+    "Sharp;T;RAW;38000;0;0;T;264,1848,264,792,264,792,264,792,264,792,264,1848,264,1848,264,1848,264,792,264,1848,264,792,264,792,264,792,264,1848,264,792,264,43560,264,1848,264,792,264,792,264,792,264,792,264,792,264,792,264,792,264,1848,264,792,264,1848,264,1848,264,1848,264,792,264,1848,264,43560",
+    "Sharp;T;RAW;38000;0;0;T;278,1812,276,762,282,758,276,765,279,761,273,1818,281,1809,279,1811,277,762,282,1809,279,760,274,766,278,762,282,1809,279,760,274,44279,276,1813,275,763,281,759,275,766,278,762,272,768,276,764,280,760,274,1817,271,768,276,1815,273,1817,271,1819,280,759,275,1816,272,44276,279,1812,276,763,281,758,276,765,279,761,273,1818,281,1810,278,1811,277,762,272,1819,279,760,274,766,278,762,282,1809,279,760,274",
+    "Sharp;T;RAW;38000;0;0;T;281,1803,278,771,274,782,274,775,281,769,276,1807,274,1817,274,1835,256,766,280,1804,277,780,276,773,283,767,278,1831,250,780,276,44910,276,1835,256,766,280,777,279,771,275,774,282,767,278,779,277,773,283,1800,281,768,277,1814,277,1806,275,1808,283,766,279,1811,280,44937,280,1803,278,771,274,783,283,766,279,770,275,1808,273,1819,272,1811,280,768,277,1807,274,782,274,776,280,769,276,1833,248,784,282",
+    "Sharp;T;RAW;38000;0;0;T;3378,1656,440,400,439,1239,440,400,439,1239,439,400,439,1239,440,399,440,1238,440,400,439,1239,521,371,412,1215,464,1215,464,399,440,1239,439,399,440,1239,439,1240,438,1240,438,1241,438,401,438,401,438,402,437,1242,437,402,437,1242,437,402,437,402,437,1242,437,402,437,402,437,402,437,1242,437,1242,437,1242,437,402,437,1242,437,402,437,402,437,402,437,1242,437,402,437,402,437,402,437,402,437,402,437,1242,437,1242,437",
+    "Silver;T;NEC;0;247;17;T",
+    "Sky;A;RAW;38000;0;0;T;2701,861,496,420,445,444,444,885,446,871,892,441,444,441,444,441,471,415,471,415,470,417,467,444,440,446,883,891,436,449,437,449,437,450,436,450,436,449,883,448,437,451,436,894,436,450,436,450,436,450,436,450,436,450,882,449,436,894,883,116552,2698,862,469,448,438,449,438,894,437,880,884,448,437,449,437,448,438,449,437,449,437,449,437,449,437,449,884,890,437,449,437,449,437,449,437,449,437,449,884,448,437,450,437,893,437,449,437,449,437,449,437,449,437,449,884,448,436,894,883",
+    "SMSL;A;NEC;18;52;9;T",
+    "SMSL;A;NEC;18;54;9;T",
+    "Soniq;T;NEC;114;221;17;T",
+    "Soniq;T;NEC;114;221;26;T",
+    "Sonos;A;NEC;128;217;140;T",
+    "Sony;A;NEC;1;254;6;T",
     "Sony;A;SONY12;16;0;32;T",
+    "Sony;A;SONY15;153;0;20;T",
     "Sony;A;SONY15;48;0;20;T",
+    "Steljes;A;NEC;133;35;151;T",
+    "Stinger;C;NEC;134;96;5;T",
+    "Strong;T;NEC;160;95;95;T",
+    "Sunbrite;T;NEC;2;253;28;T",
+    "Sweex/Westinghouse;T;NEC;1;254;17;T",
+    "Symphonic;T;RAW;38000;0;0;T;3488,3488,872,2616,872,872,872,872,872,2616,872,872,872,2616,872,2616,872,2616,872,872,872,872,872,2616,872,2616,872,872,872,2616,872,2616,872,872,872,2616,872,872,872,872,872,872,872,2616,872,2616,872,872,872,872,872,34008",
+    "Syntax-Brillian;T;NEC;4;185;26;T",
+    "TaoTronics;A;NEC;128;127;30;T",
+    "Telekom;T;RAW;38000;0;0;T;333,600,315,288,638,294,309,594,321,281,645,591,636,595,643,589,638,592,313,290,646,585,330",
+    "Terratec;A;RC5;10;0;47;T",
+    "Teufel;A;NEC;128;127;28;T",
+    "Teufel;A;NEC;239;1;40;T",
+    "Teufel;A;NEC;253;2;225;T",
+    "Tevion;T;NEC;0;255;8;T",
     "Theta Digital;A;RC5;16;0;8;T",
-    "Toshiba;T;NEC;64;191;16;T",
+    "Toshiba;A;NEC;45;211;19;T",
+    "Toshiba;A;NEC;69;189;189;T",
+    "Town Country UConnect;C;NEC;129;241;144;T",
+    "Town Country UConnect;C;NEC;129;241;16;T",
     "Turtle Beach;A;NEC;1;249;20;T",
+    "Ultimea;A;NEC;0;11;187;T;43",
     "Velodyne;A;NEC;0;69;196;T",
-    "Yamaha;T;NEC;80;175;5;T",
+    "Vitec;T;NEC;173;237;197;T",
+    "Vizio;A;NEC;0;255;72;T",
+    "Vizio;T;RAW;38000;0;0;T;9219,4485,636,495,660,469,661,1626,661,471,658,473,657,474,656,499,631,500,630,1657,630,1657,631,500,630,1657,630,1657,631,1657,631,1657,630,1657,631,1657,631,500,630,500,630,1657,631,500,630,500,630,500,630,500,631,500,630,1657,631,1657,631,500,630,1657,631,1658,630,1657,631,1658,630,39868,9106,2178,655",
+    "Volvo;C;RAW;38000;0;0;T;8437,4180,535,1581,511,1553,539,523,538,551,510,552,509,552,509,1581,511,554,507,554,507,1582,510,1580,512,1582,510,552,509,553,508,553,508,551,510,22717,534,1581,511,1580,512,550,511,552,509,553,508,553,508,1582,510,555,517,544,517,1573,508,1581,511,1583,509,553,508,554,507,554,507,552,509,22718,543,1572,509,1581,511,551,510,554,507,554,507,554,518,1572,509,556,516,546,515,1574,507,1582,510,1584,508,528,533,555,517,544,517,543,508,22719,542,1547,534,1582,510,526,535,554,518,544,517,545,516,1573,508,556,516,546,515,1575,517,1572,509,1585,517,544,517,545,516,545,516,543,508",
+    "Xiaomi;A;NEC;32;223;80;T",
     "Yamaha;A;NEC;120;135;156;T",
     "Yamaha;A;NEC;120;135;162;D",
-    "Yamaha;A;NEC;122;133;28;T",
+    "Yamaha;A;NEC;122;0;28;T;226",
     "Yamaha;A;NEC;122;133;220;T",
     "Yamaha;A;NEC;122;133;255;T",
+    "Yamaha;A;NEC;122;133;28;T",
+    "Yamaha;A;NEC;122;133;28;T;226",
     "Yamaha;A;NEC;125;130;114;T",
     "Yamaha;A;NEC;125;130;148;T",
-    "Yamaha;A;NEC;126;129;38;D",
     "Yamaha;A;NEC;126;129;160;D",
     "Yamaha;A;NEC;126;129;162;D",
+    "Yamaha;A;NEC;126;129;38;D",
     "Yamaha;A;NEC;128;55;157;T",
+    "Yamaha;A;RAW;38000;0;0;T;9004,4420,594,552,568,1642,596,548,572,1640,600,1636,592,1644,594,1642,596,548,572,1640,600,544,576,1636,592,552,568,550,570,548,570,548,572,1640,600,544,574,544,566,1646,594,1644,596,1642,598,546,574,544,574,544,564,1646,594,1642,596,548,572,548,572,546,572,1638,592,1646,594,1644,596,39726,9002,2188,596",
+    "Yamaha;T;NEC;80;175;5;T",
+    "Zenith;T;RAW;38000;0;0;T;591,411,593,4025,593,5030,593,411,593,4025,593,411,593,4025,618,5005,619,5003,593,439,564,4027,592,439,564,4029,590,5033,590,439,564,4055,563,123130,617,387,618,3999,593,5031,592,439,564,4027,592,439,564,4029,590,5034,589,5059,563,440,563,4056,563,442,561,4058,561,5063,560,443,560,4059,560",
+    "Zenith;T;RAW;38000;0;0;T;595,403,595,4002,594,5001,595,404,594,4002,594,405,593,4003,594,5001,595,5001,595,405,593,4003,594,405,593,4004,592,5004,592,406,592,4004,593",
     };
 
     private static List<Entry> cache;
@@ -222,15 +413,28 @@ public final class CodeBook {
             List<Entry> list = new ArrayList<Entry>();
             for (String row : DATA) {
                 String[] p = row.split(";");
+                String proto = p[2];
+                int g = -1;
+                int[] raw = null;
+                if (p.length > 7) {
+                    if ("RAW".equals(proto)) {
+                        String[] parts = p[7].split(",");
+                        raw = new int[parts.length];
+                        for (int i = 0; i < parts.length; i++) raw[i] = Integer.parseInt(parts[i]);
+                    } else {
+                        g = Integer.parseInt(p[7]);
+                    }
+                }
                 list.add(new Entry(
                         p[0].split("/"),
-                        p[1].indexOf('T') >= 0,
-                        p[1].indexOf('A') >= 0,
+                        p[1],
                         "D".equals(p[6]),
-                        p[2],
+                        proto,
                         Integer.parseInt(p[3]),
                         Integer.parseInt(p[4]),
-                        Integer.parseInt(p[5])));
+                        Integer.parseInt(p[5]),
+                        g,
+                        raw));
             }
             cache = Collections.unmodifiableList(list);
         }
@@ -253,7 +457,7 @@ public final class CodeBook {
      * Códigos para enviar, primero los que alternan y al final los "mute ON" discretos,
      * así un equipo que tenga ambos termina siempre silenciado.
      */
-    public static List<Entry> select(boolean tv, boolean audio, String brand) {
+    public static List<Entry> select(boolean tv, boolean audio, boolean car, String brand) {
         List<Entry> toggles = new ArrayList<Entry>();
         List<Entry> discretes = new ArrayList<Entry>();
         for (Entry e : all()) {
@@ -264,7 +468,7 @@ public final class CodeBook {
                 }
                 if (!match) continue;
             }
-            boolean typeOk = (tv && e.tv) || (audio && e.audio);
+            boolean typeOk = (tv && e.tv) || (audio && e.audio) || (car && e.car);
             if (!typeOk) continue;
             if (e.discrete) discretes.add(e); else toggles.add(e);
         }

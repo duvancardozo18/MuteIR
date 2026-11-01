@@ -36,20 +36,29 @@ public final class IrCodec {
 
     /** NEC estándar: cabecera 9 ms / 4,5 ms. Palabra: D, S, F, ~F (LSB primero). */
     public static Signal nec(int d, int s, int f) {
-        return pulseDistance(38000, 16 * 564, 8 * 564, 564, 564, 1692, necWord(d, s, f), 32);
+        return nec(d, s, f, ~f);
+    }
+
+    /** NEC con el cuarto byte explícito (algunos equipos no usan ~F). */
+    public static Signal nec(int d, int s, int f, int g) {
+        return pulseDistance(38000, 16 * 564, 8 * 564, 564, 564, 1692, necWord(d, s, f, g), 32);
     }
 
     /** NEC "extendido" con cabecera corta 4,5 ms / 4,5 ms (Samsung y similares). */
     public static Signal necx(int d, int s, int f) {
-        return pulseDistance(38000, 8 * 564, 8 * 564, 564, 564, 1692, necWord(d, s, f), 32);
+        return necx(d, s, f, ~f);
     }
 
-    private static long necWord(int d, int s, int f) {
+    public static Signal necx(int d, int s, int f, int g) {
+        return pulseDistance(38000, 8 * 564, 8 * 564, 564, 564, 1692, necWord(d, s, f, g), 32);
+    }
+
+    private static long necWord(int d, int s, int f, int g) {
         long w = 0;
         w |= (d & 0xFFL);
         w |= (s & 0xFFL) << 8;
         w |= (f & 0xFFL) << 16;
-        w |= ((~f) & 0xFFL) << 24;
+        w |= (g & 0xFFL) << 24;
         return w;
     }
 
@@ -155,6 +164,43 @@ public final class IrCodec {
             out.set(out.size() - 1, out.get(out.size() - 1) + GAP_US);
         }
         return toArray(out);
+    }
+
+    // ---------------------------------------------------------------- Philips RC6
+
+    /** RC6 modo 0 (36 kHz, bifásico): 8 bits de dirección y 8 de comando, MSB primero. */
+    public static Signal rc6(int address, int command) {
+        List<Boolean> lv = new ArrayList<Boolean>();
+        for (int i = 0; i < 6; i++) lv.add(true);      // líder: 6 unidades ON
+        for (int i = 0; i < 2; i++) lv.add(false);     // y 2 unidades OFF
+        rc6Bit(lv, 1, 1);                              // bit de inicio
+        for (int i = 0; i < 3; i++) rc6Bit(lv, 0, 1);  // modo 0
+        rc6Bit(lv, 0, 2);                              // bit de alternancia (doble ancho)
+        for (int b = 7; b >= 0; b--) rc6Bit(lv, (address >> b) & 1, 1);
+        for (int b = 7; b >= 0; b--) rc6Bit(lv, (command >> b) & 1, 1);
+        boolean[] levels = new boolean[lv.size()];
+        for (int i = 0; i < levels.length; i++) levels[i] = lv.get(i);
+        return new Signal(36000, mergeLevels(levels, 444));
+    }
+
+    /** En RC6, 1 = ON luego OFF y 0 = OFF luego ON (al revés que RC5). */
+    private static void rc6Bit(List<Boolean> lv, int bit, int width) {
+        boolean first = bit == 1;
+        for (int i = 0; i < width; i++) lv.add(first);
+        for (int i = 0; i < width; i++) lv.add(!first);
+    }
+
+    // ---------------------------------------------------------------- Patrón crudo
+
+    /** Patrón capturado tal cual (ON/OFF alternado empezando por ON). */
+    public static Signal raw(int carrierHz, int[] pattern) {
+        int[] p = pattern;
+        if (p.length % 2 == 1) {
+            p = new int[pattern.length + 1];
+            System.arraycopy(pattern, 0, p, 0, pattern.length);
+            p[pattern.length] = GAP_US;
+        }
+        return new Signal(carrierHz, p);
     }
 
     private static int[] toArray(List<Integer> list) {

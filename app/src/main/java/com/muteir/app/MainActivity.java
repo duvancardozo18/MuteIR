@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
     private RadioButton rbAll;
     private RadioButton rbTv;
     private RadioButton rbAudio;
+    private RadioButton rbCar;
     private Spinner spBrand;
     private Spinner spProto;
     private EditText etD;
@@ -44,7 +45,7 @@ public class MainActivity extends Activity {
     private EditText etF;
 
     private static final String[] PROTOS = {
-            "NEC", "NEC corto (Samsung)", "RC5 (Philips)", "Sony 12 bits", "Sony 15 bits", "JVC"
+            "NEC", "NEC corto (Samsung)", "RC5 (Philips)", "RC6 (Philips)", "Sony 12 bits", "Sony 15 bits", "JVC"
     };
 
     @Override
@@ -85,11 +86,13 @@ public class MainActivity extends Activity {
         RadioGroup group = new RadioGroup(this);
         group.setOrientation(RadioGroup.HORIZONTAL);
         rbAll = radio("Todo");
-        rbTv = radio("Solo TV");
-        rbAudio = radio("Solo audio");
+        rbTv = radio("TV");
+        rbAudio = radio("Audio");
+        rbCar = radio("Carro");
         group.addView(rbAll);
         group.addView(rbTv);
         group.addView(rbAudio);
+        group.addView(rbCar);
         rbAll.setChecked(true);
         root.addView(group);
 
@@ -102,7 +105,8 @@ public class MainActivity extends Activity {
             public void onClick(View v) {
                 boolean tv = rbAll.isChecked() || rbTv.isChecked();
                 boolean audio = rbAll.isChecked() || rbAudio.isChecked();
-                runSequence(CodeBook.select(tv, audio, null), btnAll, "MUTEAR TODO");
+                boolean car = rbAll.isChecked() || rbCar.isChecked();
+                runSequence(CodeBook.select(tv, audio, car, null), btnAll, "MUTEAR TODO");
             }
         });
         root.addView(btnAll, matchWrap(dp(8), 0));
@@ -130,7 +134,7 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 String brand = (String) spBrand.getSelectedItem();
-                runSequence(CodeBook.select(true, true, brand), btnBrand, "Mutear esta marca");
+                runSequence(CodeBook.select(true, true, true, brand), btnBrand, "Mutear esta marca");
             }
         });
         root.addView(btnBrand);
@@ -138,7 +142,7 @@ public class MainActivity extends Activity {
         // --- Código propio
         root.addView(section("Código propio"));
         root.addView(hint("Útil para marcas que no están en la lista. Valores en decimal o con 0x. "
-                + "Para RC5, Sony y JVC se ignora el campo S."));
+                + "Para RC5, RC6, Sony y JVC se ignora el campo S."));
         spProto = new Spinner(this);
         spProto.setAdapter(new ArrayAdapter<String>(this,
                 android.R.layout.simple_spinner_dropdown_item, PROTOS));
@@ -354,8 +358,9 @@ public class MainActivity extends Activity {
                     case 0: sig = IrCodec.nec(d, sub, f); break;
                     case 1: sig = IrCodec.necx(d, sub, f); break;
                     case 2: sig = IrCodec.rc5(d, f, false); break;
-                    case 3: sig = IrCodec.sony(d, f, 12, 3); break;
-                    case 4: sig = IrCodec.sony(d, f, 15, 3); break;
+                    case 3: sig = IrCodec.rc6(d, f); break;
+                    case 4: sig = IrCodec.sony(d, f, 12, 3); break;
+                    case 5: sig = IrCodec.sony(d, f, 15, 3); break;
                     default: sig = IrCodec.jvc(d, f); break;
                 }
                 final String err = send(sig);
